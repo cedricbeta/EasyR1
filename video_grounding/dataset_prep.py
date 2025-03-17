@@ -1,153 +1,35 @@
-import json
 import os
+import json
+import argparse
+import random
+from PIL import Image
 import cv2
 import numpy as np
+from datasets import Dataset, DatasetDict, Sequence
+from datasets import Image as ImageData
 from tqdm import tqdm
-from datasets import Dataset
-import random
-import argparse
-
-
-def create_video_grounding_dataset(videos_dir, annotations_file, output_dir, initial_frames_per_min=1, split="train"):
-    """
-    Create a video grounding dataset compatible with EasyR1.
-    
-    Note: initial_frames_per_min is just for initial sampling of frames.
-    The model will predict the optimal sampling rate.
-    """
-    # Load annotations
-    # with open(annotations_file, 'r') as f:
-    #     data = json.load(f)
-    data = []
-    with open(annotations_file, 'r') as f:
-        for line in f:
-            # Remove any trailing whitespace and ensure the line is not empty
-            line = line.strip()
-            if line:
-                data.append(json.loads(line))
-    
-    dataset_records = []
-    
-    for video_entry in tqdm(data):
-        video_key = video_entry["key"]
-        video_path = os.path.join(videos_dir, f"{video_key}.mp4")
-        if not os.path.exists(video_path):
-            video_path = os.path.join(videos_dir, f"{video_key}.webm")
-            if not os.path.exists(video_path):
-                print(f"Video for {video_key} not found, skipping...")
-                continue
-        
-        # Get video metadata
-        video_info = video_entry["video_info"]
-        duration_min = video_info["duration_minutes"]
-        fps = video_info["fps"]
-        
-        # Calculate the total frames to extract
-        total_frames = int(duration_min * initial_frames_per_min)
-        frame_interval = int(duration_min * 60 * fps / total_frames)
-        
-        # Extract frames
-        sampled_frames = []
-        frames_dir = os.path.join(output_dir, "frames", video_key)
-        os.makedirs(frames_dir, exist_ok=True)
-        
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print(f"Error opening video file {video_path}")
-            continue
-            
-        for i in range(total_frames):
-            frame_idx = i * frame_interval
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
-            if ret:
-                frame_path = os.path.join(frames_dir, f"frame_{i:04d}.jpg")
-                cv2.imwrite(frame_path, frame)
-                sampled_frames.append(frame_path)
-            else:
-                print(f"Failed to extract frame {i} from {video_path}")
-        
-        cap.release()
-        
-        # Create QA pairs
-        for qa in video_entry["qa"]:
-            question = qa["question"]
-            answer = qa["answer"]  # This is the multiple-choice answer (A,B,C,D)
-            time_reference = qa["time_reference"]
-            
-            # Process time reference for grounding
-            start_time, end_time = parse_time_reference(time_reference)
-            
-            # For training data, compute the ground truth layer and segment
-            layer, segment_id = compute_layer_segment(start_time, end_time, duration_min)
-            
-            # Store ground truth with placeholder for sampling rate (model will predict this)
-            # We use a placeholder value for the sampling rate in the ground truth
-            ground_truth = f"<grounding>{layer}, {segment_id}, 0</grounding>"
-            
-            dataset_records.append({
-                "problem": question,
-                "answer": ground_truth,
-                "images": sampled_frames,
-                "time_reference": time_reference,
-                "video_id": video_key,
-                "duration_min": float(duration_min),
-                "fps": float(fps),
-                "multiple_choice_answer": answer,  # Original multiple-choice answer
-                "initial_frames_per_min": initial_frames_per_min  # Store the initial sampling rate
-            })
-    
-    # Split into train/test if needed
-    if split == "full":
-        all_records = dataset_records
-    else:
-        # Shuffle with fixed seed for reproducibility
-        random.seed(42)
-        random.shuffle(dataset_records)
-        
-        if split == "train":
-            all_records = dataset_records[:int(0.8 * len(dataset_records))]
-        else:  # test
-            all_records = dataset_records[int(0.8 * len(dataset_records)):]
-    
-    # Save dataset
-    dataset = Dataset.from_dict({
-        k: [r[k] for r in all_records] for k in all_records[0].keys()
-    })
-    
-    dataset.save_to_disk(os.path.join(output_dir, split))
-    print(f"Created {split} dataset with {len(all_records)} examples")
-    
-    return dataset
-
+import pandas as pd
 
 def parse_time_reference(time_ref):
     """Parse time reference in format '00:15-00:19'"""
     if not time_ref or "-" not in time_ref:
         return 0, 0
-    
     parts = time_ref.split("-")
     if len(parts) != 2:
         return 0, 0
-        
     start, end = parts
-    
     try:
         start_min, start_sec = map(int, start.split(":"))
         end_min, end_sec = map(int, end.split(":"))
-        
         start_time = start_min * 60 + start_sec
         end_time = end_min * 60 + end_sec
-        
         return start_time, end_time
     except ValueError:
         return 0, 0
 
-
 def compute_layer_segment(start_time, end_time, video_duration_min):
     """
     Compute optimal layer and segment ID based on time reference.
-    
     Layer 0: Whole video as one segment
     Layer 1: Video split into 2 segments
     Layer 2: Video split into 4 segments
@@ -155,63 +37,156 @@ def compute_layer_segment(start_time, end_time, video_duration_min):
     Layer 4: Video split into 16 segments
     """
     video_duration_sec = video_duration_min * 60
-    
-    # Start with finest granularity we want to consider
     max_layer = 4
     best_layer = 0
     best_segment = 0
     best_iou = 0
-    
-    # Try each layer to find the best match
     for layer in range(max_layer + 1):
         num_segments = 2**layer
         segment_duration = video_duration_sec / num_segments
-        
-        # Find segment with maximum IoU
         for segment_id in range(num_segments):
             segment_start = segment_id * segment_duration
             segment_end = (segment_id + 1) * segment_duration
-            
-            # Calculate IoU
             intersection_start = max(start_time, segment_start)
             intersection_end = min(end_time, segment_end)
-            
             if intersection_end > intersection_start:
                 intersection = intersection_end - intersection_start
                 union = max(end_time, segment_end) - min(start_time, segment_start)
                 iou = intersection / union
-                
                 # Prefer more granular layers if IoU is at least 0.7
                 if iou > best_iou or (iou >= 0.7 and layer > best_layer):
                     best_iou = iou
                     best_layer = layer
                     best_segment = segment_id
-    
     return best_layer, best_segment
 
+def sample_frames_from_video(video_path, frames_per_min=1):
+    """Extract frames from video and return them as a list of PIL images along with the video duration in minutes."""
+    frames = []
+    if not os.path.exists(video_path):
+        print(f"Warning: Video file {video_path} does not exist.")
+        return frames, 0
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error opening video file {video_path}")
+        return frames, 0
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_sec = total_frames / fps
+    duration_min = duration_sec / 60
+    frame_interval = int(fps * 60 / frames_per_min)
+    frame_idx = 0
+    while frame_idx < total_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame_rgb)
+        frames.append(image)
+        frame_idx += frame_interval
+    cap.release()
+    return frames, duration_min
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare video grounding dataset")
-    parser.add_argument("--videos_dir", type=str, required=True, help="Directory containing videos")
-    parser.add_argument("--annotations_file", type=str, required=True, help="Path to annotations JSON")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
-    parser.add_argument("--initial_frames_per_min", type=int, default=1, help="Initial number of frames to sample per minute")
+def generate_video_grounding_data(data_path: str, video_dir: str, frames_per_min: int = 1):
+    """
+    Generator that yields examples for a video grounding dataset.
+    It loops over all JSON files in data_path, and for each file:
+      - Loads the JSON data (containing the video key and QA pairs)
+      - Finds the corresponding video file in video_dir (using common video extensions)
+      - Samples frames from the video (or generates fake frames if not found)
+      - Processes each QA pair (parsing the time reference and computing the segment)
+      - Yields a dictionary with keys:
+          "images": list of PIL images,
+          "problem": question prefixed with "<image>\n",
+          "answer": the grounding string,
+          "id": unique identifier,
+          "time_reference": time reference string,
+          "video_id": video key,
+          "duration_min": video duration in minutes,
+          "multiple_choice_answer": original answer,
+          "ground_truth": same as answer
+    """
+    for file_name in os.listdir(data_path):
+        if not file_name.endswith(".json"):
+            continue
+        json_file = os.path.join(data_path, file_name)
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        video_key = data.get("key", os.path.splitext(file_name)[0])
+        print(f"Processing video: {video_key}")
+        # Look for video file using common extensions
+        video_path = None
+        for ext in [".mp4", ".webm", ".avi", ".mov"]:
+            potential_path = os.path.join(video_dir, f"{video_key}{ext}")
+            if os.path.exists(potential_path):
+                video_path = potential_path
+                break
+        if not video_path:
+            fake_duration = 60  # in minutes
+            print(f"Video file for {video_key} not found. Using fake duration of {fake_duration} minutes.")
+            frames = []
+            for i in range(10):  # generate 10 fake frames
+                img = Image.new('RGB', (320, 240), color=(i*20, 100, 200))
+                frames.append(img)
+            duration_min = fake_duration
+        else:
+            frames, duration_min = sample_frames_from_video(video_path, frames_per_min)
+        print(f"Extracted {len(frames)} frames from video with duration {duration_min:.2f} minutes")
+        qa_pairs = data.get("qa", [])
+        for qa in qa_pairs:
+            uid = qa.get("uid", os.path.splitext(file_name)[0])
+            question = qa.get("question", "")
+            answer = qa.get("answer", "")
+            time_reference = qa.get("time_reference", "")
+            start_time, end_time = parse_time_reference(time_reference)
+            layer, segment_id = compute_layer_segment(start_time, end_time, duration_min)
+            ground_truth = f"<grounding>{layer}, {segment_id}, 0</grounding>"
+            yield {
+                "images": frames,
+                "problem": "<image>\n" + question,
+                "answer": ground_truth,
+                "id": uid,
+                "time_reference": time_reference,
+                "video_id": video_key,
+                "duration_min": float(duration_min),
+                "multiple_choice_answer": answer,
+                "ground_truth": ground_truth
+            }
+
+def main():
+    parser = argparse.ArgumentParser(description="Create video grounding dataset and save as Parquet splits")
+    parser.add_argument("--data_path", type=str, default="video_grounding", help="Directory containing JSON files (e.g., train)")
+    parser.add_argument("--video_dir", type=str, default="video_grounding", help="Directory containing video files")
+    parser.add_argument("--output_dir", type=str, default="data/video_grounding", help="Output directory for saving Parquet files")
+    parser.add_argument("--frames_per_min", type=int, default=1, help="Number of frames to extract per minute")
     args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
     
-    # Create train split
-    create_video_grounding_dataset(
-        videos_dir=args.videos_dir,
-        annotations_file=args.annotations_file,
-        output_dir=args.output_dir,
-        initial_frames_per_min=args.initial_frames_per_min,
-        split="train"
+    # Create dataset from the generator
+    dataset = Dataset.from_generator(
+        generate_video_grounding_data,
+        gen_kwargs={
+            "data_path": args.data_path,
+            "video_dir": args.video_dir,
+            "frames_per_min": args.frames_per_min
+        }
     )
     
-    # Create test split
-    # create_video_grounding_dataset(
-    #     videos_dir=args.videos_dir,
-    #     annotations_file=args.annotations_file,
-    #     output_dir=args.output_dir,
-    #     initial_frames_per_min=args.initial_frames_per_min,
-    #     split="test"
-    # )
+    # Split the dataset 80:20 into train and test splits
+    split_dataset = dataset.train_test_split(test_size=0.2, seed=42)
+    
+    # Cast the "images" column to a Sequence of ImageData objects for each split
+    for split in split_dataset.keys():
+        split_dataset[split] = split_dataset[split].cast_column("images", Sequence(ImageData()))
+    
+    # Convert each split to a pandas DataFrame and save as Parquet
+    for split, ds in split_dataset.items():
+        df = ds.to_pandas()
+        parquet_path = os.path.join(args.output_dir, f"{split}.parquet")
+        df.to_parquet(parquet_path)
+        print(f"Saved {split} split as Parquet to {parquet_path}")
+
+if __name__ == "__main__":
+    main()

@@ -33,7 +33,7 @@ def video_grounding(predict_str, ground_truth):
         pred_parts = [p.strip() for p in pred_match.group(1).split(',')]
         gt_parts = [p.strip() for p in gt_match.group(1).split(',')]
         
-        if len(pred_parts) != 3 or len(gt_parts) != 2:
+        if len(pred_parts) != 3 or len(gt_parts) != 3:
             return 0.2 * format_score  # Partial score for almost correct format
         
         # 3. Layer and segment accuracy (50% of score)
