@@ -1,0 +1,79 @@
+data:
+  train_files: /path/to/dataset/train  # Will be overridden in script
+  val_files: /path/to/dataset/test     # Will be overridden in script
+  prompt_key: problem
+  answer_key: answer
+  image_key: images
+  max_prompt_length: 1024
+  max_response_length: 512
+  rollout_batch_size: 128  # Adjust based on your GPU memory
+  shuffle: true
+  seed: 1
+  max_pixels: 4194304
+  min_pixels: 262144
+
+algorithm:
+  adv_estimator: grpo
+  kl_coef: 0.0
+
+worker:
+  actor:
+    global_batch_size: 64
+    micro_batch_size_per_device_for_update: 4
+    micro_batch_size_per_device_for_experience: 8
+    max_grad_norm: 1.0
+    entropy_coeff: 1.0e-3
+    use_kl_loss: true
+    kl_loss_coef: 1.0e-2
+    kl_loss_type: low_var_kl
+    padding_free: true
+    ulysses_sequence_parallel_size: 1
+    model:
+      model_path: Qwen/Qwen2.5-VL-3B-Instruct  # Will be overridden in script
+      enable_gradient_checkpointing: true
+      trust_remote_code: false
+    optim:
+      lr: 5.0e-7  # Lower learning rate for video tasks
+      weight_decay: 1.0e-2
+      lr_warmup_ratio: 0.03
+    fsdp:
+      enable_full_shard: true
+      enable_cpu_offload: false
+      enable_rank0_init: true
+    offload:
+      offload_params: true
+      offload_optimizer: true
+
+  rollout:
+    temperature: 0.7
+    n: 3
+    gpu_memory_utilization: 0.7
+    enforce_eager: false
+    enable_chunked_prefill: false
+    tensor_parallel_size: 1
+    limit_images: 8  # Adjust based on your video frame count
+
+  ref:
+    offload:
+      offload_params: true
+
+  reward:
+    reward_type: function
+    compute_score: video_grounding
+
+trainer:
+  total_episodes: 10
+  logger: ["console", "wandb"]
+  project_name: video_grounding
+  experiment_name: video_grounding_grpo
+  n_gpus_per_node: 2
+  nnodes: 1
+  val_freq: 1
+  val_before_train: true
+  val_only: false
+  val_generations_to_log: 2
+  save_freq: 2
+  remove_previous_ckpt: false
+  remove_ckpt_after_load: false
+  save_checkpoint_path: null
+  load_checkpoint_path: null
