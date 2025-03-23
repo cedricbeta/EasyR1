@@ -366,7 +366,9 @@ class RayPPOTrainer:
         else:
             self.use_critic = False
 
+        print("start creating dataloader")
         self._create_dataloader()
+        print("end creating dataloader")
 
     def _create_dataloader(self):
         self.train_dataset = RLHFDataset(
@@ -383,6 +385,11 @@ class RayPPOTrainer:
             max_pixels=self.config.data.max_pixels,
         )
         # use sampler for better ckpt resume
+        
+        print(f"Size of train dataset: {len(self.train_dataset)}")
+        print("data path: ", self.config.data.train_files)
+        print("sample rlhf data: ", self.train_dataset[0])
+        
         if self.config.data.shuffle:
             train_dataloader_generator = torch.Generator()
             train_dataloader_generator.manual_seed(self.config.data.seed)
@@ -390,6 +397,9 @@ class RayPPOTrainer:
         else:
             sampler = SequentialSampler(data_source=self.train_dataset)
 
+        print(f"Rollout batch size: {self.config.data.rollout_batch_size}")
+        print("shuffle: ", self.config.data.shuffle)
+        
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.data.rollout_batch_size,
@@ -397,8 +407,9 @@ class RayPPOTrainer:
             num_workers=8,
             collate_fn=collate_fn,
             pin_memory=False,
-            drop_last=True,
+            drop_last=False,
         )
+        print(f"Size of train dataloader: {len(self.train_dataloader)}")
 
         self.val_dataset = RLHFDataset(
             data_path=self.config.data.val_files,

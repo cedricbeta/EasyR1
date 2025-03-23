@@ -6,7 +6,7 @@ data:
   image_key: images
   max_prompt_length: 1024
   max_response_length: 512
-  rollout_batch_size: 128  # Adjust based on your GPU memory
+  rollout_batch_size: 3  # Adjust based on your GPU memory
   shuffle: true
   seed: 1
   max_pixels: 4194304
