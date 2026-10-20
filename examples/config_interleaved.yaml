@@ -1,0 +1,108 @@
+data:
+  train_files: /workspace/video-rl/qwen-sft/qwen-vl-sft/videomme_two_stage_separate.json
+  val_files: /workspace/video-rl/qwen-sft/qwen-vl-sft/videomme_two_stage_separate.json
+  prompt_key: prompt
+  answer_key: answer
+  video_key: videos
+  video_fps: 2.0
+  max_prompt_length: 8192  # Much higher for 64 frames with timestamps
+  max_response_length: 1024
+  rollout_batch_size: 32   # Further reduced for stage 1 n=3, stage 2 n=1
+  mini_rollout_batch_size: null
+  val_batch_size: 1  # Use only 1 sample for validation debugging
+  format_prompt: null
+  override_chat_template: null
+  shuffle: true
+  seed: 1
+  min_pixels: 262144
+  max_pixels: 8388608  # Higher for 64 frames in stage 1
+  filter_overlong_prompts: false  # Temporarily disable to test dataset
+  dataset_type: interleaved_video  # Custom dataset type
+
+algorithm:
+  adv_estimator: grpo
+  disable_kl: false
+  use_kl_loss: true
+  kl_penalty: low_var_kl
+  kl_coef: 1.0e-2
+  online_filtering: false
+  filter_key: overall
+  filter_low: 0.01
+  filter_high: 0.99
+
+worker:
+  actor:
+    global_batch_size: 16   # Further reduced for memory efficiency
+    micro_batch_size_per_device_for_update: 1
+    micro_batch_size_per_device_for_experience: 1
+    max_grad_norm: 1.0
+    padding_free: true
+    dynamic_batching: true
+    ulysses_size: 1
+    model:
+      model_path: Qwen/Qwen2.5-VL-7B-Instruct
+      enable_gradient_checkpointing: true
+      trust_remote_code: false
+      freeze_vision_tower: false
+    optim:
+      lr: 3.0e-7  # Lower learning rate for stability
+      weight_decay: 1.0e-2
+      strategy: adamw
+      lr_warmup_ratio: 0.0
+    fsdp:
+      enable_full_shard: true
+      enable_cpu_offload: false
+      enable_rank0_init: true
+    offload:
+      offload_params: true
+      offload_optimizer: true
+
+  rollout:
+    n: 3  # Stage 1 will use n=3, Stage 2 will use n=1 (overridden in code)
+    temperature: 1.0
+    top_p: 1.0
+    limit_images: 0
+    gpu_memory_utilization: 0.6
+    enforce_eager: false
+    enable_chunked_prefill: false
+    tensor_parallel_size: 2
+    max_num_batched_tokens: 81920  # Must be > max_model_len + response_length
+    max_model_len: 65536  # Increased to accommodate 48-frame (32+16) multi-image prompts with timestamps
+    disable_tqdm: false
+    rollout_type: interleaved_video  # Use custom rollout
+    val_override_config:
+      temperature: 0.6
+      top_p: 0.95
+      n: 1
+
+  ref:
+    fsdp:
+      enable_full_shard: true
+      enable_cpu_offload: true
+      enable_rank0_init: true
+    offload:
+      offload_params: false
+
+  reward:
+    reward_type: batch
+    reward_function: ./examples/reward_function/interleaved_videomme.py:compute_interleaved_score
+
+trainer:
+  total_epochs: 12
+  max_steps: null
+  project_name: videomme_interleaved
+  experiment_name: interleaved_two_stage_grpo
+  logger: ["console", "wandb"]
+  nnodes: 1
+  n_gpus_per_node: 8
+  max_try_make_batch: 20
+  val_freq: 999  # Very high to avoid validation during training
+  val_before_train: false  # Skip validation before training
+  val_only: false  # Run actual training
+  val_generations_to_log: 2
+  save_freq: 3
+  save_limit: 3
+  save_model_only: false
+  save_checkpoint_path: null
+  load_checkpoint_path: null
+  find_last_checkpoint: true

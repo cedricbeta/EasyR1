@@ -15,6 +15,7 @@
 
 from .config import RolloutConfig
 from .vllm_rollout_spmd import vLLMRollout
+from .interleaved_rollout import InterleavedVideoRollout
 
 
-__all__ = ["RolloutConfig", "vLLMRollout"]
+__all__ = ["RolloutConfig", "vLLMRollout", "InterleavedVideoRollout"]

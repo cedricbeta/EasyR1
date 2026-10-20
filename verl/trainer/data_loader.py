@@ -20,28 +20,47 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PreTrainedTokenizer, ProcessorMixin
 
 from ..utils.dataset import RLHFDataset, collate_fn
+from ..utils.interleaved_video_dataset import InterleavedVideoDataset
 from .config import DataConfig
 
 
 def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, processor: Optional[ProcessorMixin]) -> None:
-    train_dataset = RLHFDataset(
-        data_path=config.train_files,
-        tokenizer=tokenizer,
-        processor=processor,
-        prompt_key=config.prompt_key,
-        answer_key=config.answer_key,
-        image_key=config.image_key,
-        video_key=config.video_key,
-        image_dir=config.image_dir,
-        video_fps=config.video_fps,
-        max_prompt_length=config.max_prompt_length,
-        truncation="right",
-        format_prompt=config.format_prompt,
-        min_pixels=config.min_pixels,
-        max_pixels=config.max_pixels,
-        filter_overlong_prompts=config.filter_overlong_prompts,
-        filter_overlong_prompts_workers=config.filter_overlong_prompts_workers,
-    )
+    # Choose dataset based on dataset_type
+    if config.dataset_type == "interleaved_video":
+        train_dataset = InterleavedVideoDataset(
+            data_path=config.train_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            prompt_key=config.prompt_key,
+            answer_key=config.answer_key,
+            video_key=config.video_key,
+            max_prompt_length=config.max_prompt_length,
+            truncation="right",
+            format_prompt=config.format_prompt,
+            min_pixels=config.min_pixels,
+            max_pixels=config.max_pixels,
+            filter_overlong_prompts=config.filter_overlong_prompts,
+            filter_overlong_prompts_workers=config.filter_overlong_prompts_workers,
+        )
+    else:
+        train_dataset = RLHFDataset(
+            data_path=config.train_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            prompt_key=config.prompt_key,
+            answer_key=config.answer_key,
+            image_key=config.image_key,
+            video_key=config.video_key,
+            image_dir=config.image_dir,
+            video_fps=config.video_fps,
+            max_prompt_length=config.max_prompt_length,
+            truncation="right",
+            format_prompt=config.format_prompt,
+            min_pixels=config.min_pixels,
+            max_pixels=config.max_pixels,
+            filter_overlong_prompts=config.filter_overlong_prompts,
+            filter_overlong_prompts_workers=config.filter_overlong_prompts_workers,
+        )
     # use sampler for better ckpt resume
     if config.shuffle:
         train_dataloader_generator = torch.Generator()
@@ -65,23 +84,40 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         drop_last=True,
     )
 
-    val_dataset = RLHFDataset(
-        data_path=config.val_files,
-        tokenizer=tokenizer,
-        processor=processor,
-        prompt_key=config.prompt_key,
-        answer_key=config.answer_key,
-        image_key=config.image_key,
-        video_key=config.video_key,
-        image_dir=config.image_dir,
-        video_fps=config.video_fps,
-        max_prompt_length=config.max_prompt_length,
-        truncation="right",
-        format_prompt=config.format_prompt,
-        min_pixels=config.min_pixels,
-        max_pixels=config.max_pixels,
-        filter_overlong_prompts=config.filter_overlong_prompts,
-    )
+    # Use same dataset type for validation as training
+    if config.dataset_type == "interleaved_video":
+        val_dataset = InterleavedVideoDataset(
+            data_path=config.val_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            prompt_key=config.prompt_key,
+            answer_key=config.answer_key,
+            video_key=config.video_key,
+            max_prompt_length=config.max_prompt_length,
+            truncation="right",
+            format_prompt=config.format_prompt,
+            min_pixels=config.min_pixels,
+            max_pixels=config.max_pixels,
+            filter_overlong_prompts=config.filter_overlong_prompts,
+        )
+    else:
+        val_dataset = RLHFDataset(
+            data_path=config.val_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            prompt_key=config.prompt_key,
+            answer_key=config.answer_key,
+            image_key=config.image_key,
+            video_key=config.video_key,
+            image_dir=config.image_dir,
+            video_fps=config.video_fps,
+            max_prompt_length=config.max_prompt_length,
+            truncation="right",
+            format_prompt=config.format_prompt,
+            min_pixels=config.min_pixels,
+            max_pixels=config.max_pixels,
+            filter_overlong_prompts=config.filter_overlong_prompts,
+        )
 
     if config.val_batch_size == -1:
         val_batch_size = len(val_dataset)

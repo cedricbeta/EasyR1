@@ -118,13 +118,23 @@ class BatchFunctionRewardManager(FunctionRewardManager):
             response_str = self.tokenizer.decode(
                 valid_response_ids, skip_special_tokens=self.config.skip_special_tokens
             )
-            reward_inputs.append(
-                {
-                    "response": response_str,
-                    "response_length": cur_response_length,
-                    "ground_truth": data.non_tensor_batch["ground_truth"][i],
-                }
-            )
+            reward_input = {
+                "response": response_str,
+                "response_length": cur_response_length,
+                "ground_truth": data.non_tensor_batch["ground_truth"][i],
+            }
+
+            # Add concatenated response if available (for interleaved training)
+            if "concatenated_responses" in data.non_tensor_batch:
+                reward_input["concatenated_response"] = data.non_tensor_batch["concatenated_responses"][i]
+
+            # Add stage-specific ground truths if available
+            if "stage1_ground_truth" in data.non_tensor_batch:
+                reward_input["stage1_ground_truth"] = data.non_tensor_batch["stage1_ground_truth"][i]
+            if "stage2_ground_truth" in data.non_tensor_batch:
+                reward_input["stage2_ground_truth"] = data.non_tensor_batch["stage2_ground_truth"][i]
+
+            reward_inputs.append(reward_input)
 
         scores = self.reward_fn(reward_inputs)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)

@@ -56,7 +56,7 @@ from ..utils.tokenizer import get_processor, get_tokenizer
 from ..utils.torch_dtypes import PrecisionType
 from ..utils.torch_functional import AnyPrecisionAdamW, get_constant_schedule_with_warmup
 from .config import ActorConfig, CriticConfig, FSDPConfig, ModelConfig, OptimConfig, WorkerConfig
-from .rollout import vLLMRollout
+from .rollout import vLLMRollout, InterleavedVideoRollout
 from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
@@ -335,7 +335,13 @@ class FSDPWorker(Worker):
             raise ValueError(f"rollout world size {self.world_size} is not divisible by tp size {tp_size}.")
 
         rollout_device_mesh = init_device_mesh("cuda", mesh_shape=(dp_size, tp_size), mesh_dim_names=("dp", "tp"))
-        self.rollout = vLLMRollout(
+        # Choose rollout class based on rollout_type
+        if self.config.rollout.rollout_type == "interleaved_video":
+            rollout_class = InterleavedVideoRollout
+        else:
+            rollout_class = vLLMRollout
+
+        self.rollout = rollout_class(
             model_path=self.config.actor.model.model_path,
             config=self.config.rollout,
             tokenizer=self.tokenizer,

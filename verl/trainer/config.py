@@ -54,6 +54,7 @@ class DataConfig:
     max_pixels: Optional[int] = 4194304
     filter_overlong_prompts: bool = True
     filter_overlong_prompts_workers: int = 16
+    dataset_type: Optional[str] = None
 
     def post_init(self):
         if self.image_dir is not None:
